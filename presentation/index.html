@@ -88,7 +88,7 @@
     <text class="t16" x="800" y="112">Shows every saved scan</text>
     <text class="t16" x="800" y="138">VPN likelihood per scan</text>
     <text class="t16" x="800" y="164">Which devices look the same</text>
-    <text class="t16" x="800" y="190">Accuracy of linking and detection</text>
+    <text class="t16" x="800" y="190">Compare any two scans, with reasons</text>
     <rect class="g" x="440" y="110" width="270" height="110"/>
     <text class="t18 tb" x="575" y="148" text-anchor="middle">PostgreSQL</text>
     <text class="t16" x="575" y="174" text-anchor="middle">Neon (hosted)</text>
@@ -177,7 +177,8 @@
     <g class="l"><line x1="150" y1="80" x2="163" y2="80" marker-end="url(#a5)"/><line x1="315" y1="80" x2="328" y2="80" marker-end="url(#a5)"/><line x1="480" y1="80" x2="493" y2="80" marker-end="url(#a5)"/><line x1="645" y1="80" x2="658" y2="80" marker-end="url(#a5)"/><line x1="810" y1="80" x2="823" y2="80" marker-end="url(#a5)"/><line x1="975" y1="80" x2="988" y2="80" marker-end="url(#a5)"/></g>
   </svg>
   <ul class="small">
-    <li>Latency is measured first, on an idle page, because GPU timing probes would inflate it.</li>
+    <li>The collector waits for the page to finish loading, then measures latency first, because fonts, hydration and GPU timing probes would inflate it.</li>
+    <li>It then waits up to 4 seconds for about 40 mouse movements, which the pointer-rate signal needs. If none come, the scan continues without it.</li>
     <li>The signed challenge ties the scan to the IP and time it was issued, so a scan cannot be replayed later.</li>
     <li>Location is asked through the normal browser prompt. If the visitor declines, the scan continues without it.</li>
     <li>Anti-abuse: size limit (300 KB), rate limit per IP, and strict input validation on every field.</li>
@@ -332,8 +333,8 @@
 </section>
 
 <!-- 13 -->
-<section class="slide" data-part="Part B · Many browsers" data-title="Same-device sets and evaluation">
-  <h1>Grouping scans and measuring accuracy</h1>
+<section class="slide" data-part="Part B · Many browsers" data-title="Same-device sets and training">
+  <h1>Grouping scans and training the model</h1>
   <div class="cols">
     <div>
       <h2>Same-device sets</h2>
@@ -350,10 +351,11 @@
       </ul>
     </div>
     <div>
-      <h2>Checking the model</h2>
+      <h2>Training the model</h2>
       <ul class="small">
         <li><b>Leave-both-devices-out:</b> a pair is scored with counts that exclude both of its devices, so the model never sees the answer.</li>
-        <li>The dashboard does not show linking-accuracy scores. Compare any two scans to see the reasons behind a match.</li>
+        <li><b>Public visitors never train it.</b> They have no real device name, so one laptop in two browsers would be counted as two devices. They are scored by the model, not used to build it.</li>
+        <li>The dashboard shows no linking-accuracy scores. Compare any two scans to see the reasons behind a match.</li>
       </ul>
       <div class="note small"><b>Important.</b> Scores trust device names typed by people. If one device is saved under two names, correct links count as mistakes. Use one name per physical device.</div>
     </div>
@@ -690,7 +692,7 @@
       <text x="800" y="202">Archive a batch and start a new set</text>
     </g>
   </svg>
-  <p class="small">Visitor scans are tagged <code>public-visitors</code> and are scored by the same model as lab scans. Earlier archived scans are shown and scored, but are never linked to new ones.</p>
+  <p class="small">Visitor scans are tagged <code>public-visitors</code> and are scored by the same model as lab scans, but are left out of its training. Earlier archived scans are shown and scored, but are never linked to new ones.</p>
 </section>
 
 <!-- 26 -->
