@@ -6,11 +6,15 @@ import { Archive, ArrowLeft, BarChart3, GitCompare, Layers, Loader2, Lock, Refre
 import type { ResearchObservation } from "@/utils/fingerprint";
 import { evaluateStoredModel } from "@/utils/evaluation";
 import type { ArchivedObservation } from "@/utils/research-store";
-import { browserOf, groupSameDevice, linkObservations, scoreAllPairs, type LinkageEvaluation, type LinkageModel, type LinkageResult } from "@/utils/linkage";
+import { browserOf, groupSameDevice, linkObservations, scoreAllPairs, type LinkageEvaluation, type LinkageModel, type LinkageResult, type PairPosteriors } from "@/utils/linkage";
 import { Card, Disclosure, DivergingBar, Empty, Pill, Row, inputClass, toneText, type Tone } from "@/components/ui";
 
 type Dataset = "current" | "archived" | "prototype";
 type Scope = "all" | Dataset;
+
+/** A scan is listed as "similar to" another when the model is at least this sure they are the same device. */
+const SIMILAR_MIN = 0.5;
+interface SimilarScan { item: ResearchObservation; posterior: number }
 
 const SCOPES: Array<{ id: Scope; label: string }> = [
   { id: "all", label: "All saved data" },
@@ -59,6 +63,21 @@ export default function ObservationsDashboard({ initialObservations, legacyObser
   const first = initialObservations.find((item) => item.observationId === firstId) || null;
   const second = initialObservations.find((item) => item.observationId === secondId) || null;
   const comparison = first && second && first !== second ? linkObservations(first, second, linkageModel) : null;
+  // Every pair of current scans is scored once; the sets, and each scan's "similar to" list, share it.
+  const pairs = useMemo(() => scoreAllPairs(initialObservations, linkageModel), [initialObservations, linkageModel]);
+  const similarTo = useMemo(() => {
+    const map = new Map<string, SimilarScan[]>();
+    const size = pairs.observations.length;
+    pairs.observations.forEach((item, row) => {
+      const others: SimilarScan[] = [];
+      for (let column = 0; column < size; column += 1) {
+        const posterior = pairs.posteriors[row * size + column];
+        if (column !== row && posterior >= SIMILAR_MIN) others.push({ item: pairs.observations[column], posterior });
+      }
+      map.set(item.observationId, others.sort((a, b) => b.posterior - a.posterior).slice(0, 5));
+    });
+    return map;
+  }, [pairs]);
 
   return (
     <main className="min-h-screen bg-canvas">
@@ -112,7 +131,7 @@ export default function ObservationsDashboard({ initialObservations, legacyObser
           )}
         </Card>
 
-        <SameDeviceSets observations={initialObservations} model={linkageModel} />
+        <SameDeviceSets observations={initialObservations} pairs={pairs} />
 
         <p className="px-1 text-xs leading-5 text-muted">
           These scores trust the device names you typed. If one device was saved under two names, its correct links count as mistakes,
@@ -138,7 +157,7 @@ export default function ObservationsDashboard({ initialObservations, legacyObser
           </label>
           {filtered.length === 0 ? <Empty>Nothing matches.</Empty> : (
             <div className="divide-y divide-line">
-              {filtered.map((item) => <ScanRow key={item.observationId} item={item} dataset={datasetOf.get(item.observationId)} />)}
+              {filtered.map((item) => <ScanRow key={item.observationId} item={item} dataset={datasetOf.get(item.observationId)} similar={similarTo.get(item.observationId)} />)}
             </div>
           )}
         </Disclosure>
@@ -154,13 +173,14 @@ export default function ObservationsDashboard({ initialObservations, legacyObser
   );
 }
 
-function ScanRow({ item, dataset }: { item: ResearchObservation; dataset?: Dataset }) {
+function ScanRow({ item, dataset, similar }: { item: ResearchObservation; dataset?: Dataset; similar?: SimilarScan[] }) {
   const risk = item.riskAssessment;
   return (
     <details className="group py-2.5">
       <summary className="flex cursor-pointer flex-wrap items-center justify-between gap-2">
         <span className="text-sm text-ink"><span className="font-medium">{item.deviceLabel}</span> <span className="text-muted">· {item.fingerprint.browserFamily}{item.browserMode === "private" ? " (private)" : ""} · {formatTimestamp(item.serverReceivedAt || item.fingerprint.collectedAt)}</span></span>
         <span className="flex gap-1.5">
+          {similar !== undefined && <Pill tone={similar.length ? "accent" : "neutral"}>{similar.length ? `similar to ${similar.length}` : "unique"}</Pill>}
           {dataset && dataset !== "current" && <Pill>{dataset === "archived" ? "archived" : "prototype"}</Pill>}
           {item.vpnGroundTruth !== "unknown" && <Pill tone={["none", "off"].includes(item.vpnGroundTruth) ? "neutral" : "accent"}>{item.vpnGroundTruth}</Pill>}
           {risk && (risk.band === "unknown"
@@ -169,6 +189,11 @@ function ScanRow({ item, dataset }: { item: ResearchObservation; dataset?: Datas
         </span>
       </summary>
       <div className="mt-2 grid gap-x-8 rounded-xl bg-surface-2/50 px-4 py-2 sm:grid-cols-2">
+        <Row label="VPN likelihood" value={risk ? (risk.band === "unknown" ? "not enough data" : `${risk.score}% · ${risk.headline}`) : "not scored"} />
+        <Row label="Similar devices" value={similar === undefined ? "only current-set scans are compared" : similar.length ? `${similar.length} found` : "none, looks unique"} />
+        {similar?.map(({ item: other, posterior }) => (
+          <Row key={other.observationId} label={`${other.deviceLabel} · ${browserOf(other.fingerprint)}`} value={`${formatShare(posterior)} same device${other.riskAssessment && other.riskAssessment.band !== "unknown" ? ` · VPN ${other.riskAssessment.score}%` : ""}`} />
+        ))}
         <Row label="System" value={`${item.fingerprint.osFamily} · ${item.fingerprint.browserFamily} ${item.fingerprint.browserMajor}`} />
         <Row label="IP" value={item.effectivePublicIp} mono />
         <Row label="Location" value={item.serverNetwork?.geoIp ? `${item.serverNetwork.geoIp.city}, ${item.serverNetwork.geoIp.country}` : "unavailable"} />
@@ -363,11 +388,9 @@ function VpnDetectionPanel({ observations, datasetOf }: { observations: Research
  * Distinct physical devices at a chosen confidence: scans whose same-device
  * likelihood clears the threshold are grouped into one set.
  */
-function SameDeviceSets({ observations, model }: { observations: ResearchObservation[]; model: LinkageModel }) {
+function SameDeviceSets({ observations, pairs }: { observations: ResearchObservation[]; pairs: PairPosteriors }) {
   const [threshold, setThreshold] = useState(0.85);
   const [joinClosest, setJoinClosest] = useState(true);
-  // Every pair is scored once; regrouping at another threshold is instant.
-  const pairs = useMemo(() => scoreAllPairs(observations, model), [observations, model]);
   const sets = useMemo(() => groupSameDevice(pairs, threshold, 3, joinClosest), [pairs, threshold, joinClosest]);
   const byId = useMemo(() => new Map(pairs.observations.map((item) => [item.observationId, item])), [pairs]);
   const multi = sets.filter((set) => set.observationIds.length > 1);

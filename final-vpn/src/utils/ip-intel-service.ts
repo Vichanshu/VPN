@@ -53,7 +53,7 @@ let writeQueue: Promise<void> = Promise.resolve();
 
 async function readCache(): Promise<CacheFile> {
   try {
-    const parsed = JSON.parse(await readFile(cachePath(), "utf8")) as Partial<CacheFile>;
+    const parsed = JSON.parse(await readFile(/*turbopackIgnore: true*/ cachePath(), "utf8")) as Partial<CacheFile>;
     return { entries: parsed.entries || {}, atlasStarts: parsed.atlasStarts || {} };
   } catch {
     return { entries: {}, atlasStarts: {} };

@@ -433,7 +433,7 @@ function archiveFilePath(): string {
 
 async function readJsonRows<T>(file: string): Promise<T[]> {
   try {
-    const rows = JSON.parse(await readFile(file, "utf8")) as T[];
+    const rows = JSON.parse(await readFile(/*turbopackIgnore: true*/ file, "utf8")) as T[];
     return Array.isArray(rows) ? rows : [];
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];

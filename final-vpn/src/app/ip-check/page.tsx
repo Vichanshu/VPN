@@ -31,7 +31,8 @@ export default function IpCheckPage() {
   }, []);
   useEffect(() => stopPolling, [stopPolling]);
 
-  const poll = useCallback((ip: string) => {
+  // Named so the callback can reschedule itself without referencing `poll` before it is declared.
+  const poll = useCallback(function schedule(ip: string) {
     stopPolling();
     timer.current = setTimeout(async () => {
       try {
@@ -39,9 +40,9 @@ export default function IpCheckPage() {
         const body = (await response.json()) as CheckResponse & { error?: string };
         if (!response.ok) return;
         setData((current) => ({ ...body, integrations: current?.integrations }));
-        if (body.intel.atlas.status === "running") poll(ip);
+        if (body.intel.atlas.status === "running") schedule(ip);
       } catch {
-        poll(ip);
+        schedule(ip);
       }
     }, POLL_MS);
   }, [stopPolling]);
