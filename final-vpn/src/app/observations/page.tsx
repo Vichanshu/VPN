@@ -1,7 +1,6 @@
 import Link from "next/link";
 import ObservationsDashboard from "./observations-dashboard";
 import { archivedObservations, recentLegacyObservations, recentObservations } from "@/utils/research-store";
-import { evaluateLinkage } from "@/utils/linkage";
 import { cachedLinkageModel } from "@/utils/linkage-service";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +29,6 @@ export default async function ObservationsPage() {
       initialObservations={observations}
       legacyObservations={legacyObservations}
       linkageModel={linkageModel}
-      linkageEvaluation={evaluateLinkage(observations)}
       archivedObservations={archived}
       archiveEnabled={Boolean(process.env.ARCHIVE_PASSWORD_HASH)}
     />

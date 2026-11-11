@@ -76,13 +76,19 @@ try {
   const updates: Array<{ table: string; id: string; risk: NonNullable<ResearchObservation["riskAssessment"]> }> = [];
 
   for (const table of TABLES) {
+    // A fresh database (for example the visitor study) has no archive or prototype table.
+    const exists = (await client.query("SELECT to_regclass($1) AS name", [table.name])).rows[0].name;
+    if (!exists) {
+      console.log(`Skipping ${table.name}: table does not exist`);
+      continue;
+    }
     // Same additive migration the app runs on startup.
     await client.query(`ALTER TABLE ${table.name} ADD COLUMN IF NOT EXISTS vpn_assessment jsonb`);
     const hasLatency = table.dataset !== "prototype";
     const result = await client.query(`
       SELECT observation_id, device_label, browser_mode, vpn_ground_truth, fingerprint, server_seen_ip,
              effective_public_ip, server_received_at, server_network, path_probes, device_location,
-             risk_assessment, vpn_assessment, ${hasLatency ? "client_latency" : "NULL AS client_latency"}, created_at
+             risk_assessment, vpn_assessment, ${hasLatency ? "client_latency, study_id" : "NULL AS client_latency, NULL AS study_id"}, created_at
         FROM ${table.name} ORDER BY created_at ASC`);
     const tableObservations = result.rows.map((row) => ({
       dataset: table.dataset,
@@ -99,6 +105,7 @@ try {
       deviceLocation: row.device_location,
       riskAssessment: row.vpn_assessment || row.risk_assessment || undefined,
       clientLatency: row.client_latency || null,
+      studyId: row.study_id || undefined,
     })) as Array<ResearchObservation & { dataset: string }>;
     rows.push(...result.rows.map((row) => ({ table: table.name, observation_id: row.observation_id, vpn_assessment: row.vpn_assessment })));
 
@@ -106,7 +113,8 @@ try {
       const network = observation.serverNetwork || reportedNetwork(observation);
       // Earlier scans of the same table, newest first, as recentObservations() returns them.
       const previous = tableObservations.slice(0, index).reverse();
-      const model = trainLinkageModel(previous, { maxObservations: 400, maxDifferentPairs: 30_000 });
+      // Public visitors have no real device name, so they are scored but never train the model (as in linkage-service.ts).
+      const model = trainLinkageModel(previous.filter((item) => item.studyId !== "public-visitors"), { maxObservations: 400, maxDifferentPairs: 30_000 });
       const deviceIds = new Map<string, string>();
       for (const set of groupSameDevice(scoreAllPairs(previous, model), 0.85, 3, true)) for (const id of set.observationIds) deviceIds.set(id, set.clusterId);
       const linked = previous.map((earlier) => ({ previous: earlier, linkage: linkObservations(observation, earlier, model) })).filter((item) => item.linkage.verdict !== "insufficient-evidence");

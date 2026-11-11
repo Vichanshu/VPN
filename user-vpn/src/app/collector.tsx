@@ -22,6 +22,20 @@ function visitorLabel(): string {
   return `Visitor ${id}`;
 }
 
+type PointerGlobal = typeof globalThis & { __fpPointerIntervals?: number[] };
+
+async function pageIdle(): Promise<void> {
+  if (document.readyState !== "complete") await new Promise<void>((resolve) => window.addEventListener("load", () => resolve(), { once: true }));
+  await new Promise((resolve) => window.setTimeout(resolve, 400));
+}
+
+async function waitForPointerActivity(maximumMs = 4_000): Promise<void> {
+  const started = performance.now();
+  while (performance.now() - started < maximumMs && ((globalThis as PointerGlobal).__fpPointerIntervals?.length ?? 0) < 40) {
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+  }
+}
+
 /** Collects and submits silently on load; renders nothing. */
 export default function Collector() {
   const started = useRef(false);
@@ -39,9 +53,13 @@ export default function Collector() {
         if (!networkResponse.ok) return;
         const networkResult = await networkResponse.json() as ServerNetworkData;
 
+        // Let the page finish loading so fonts and hydration do not inflate the round-trip times.
+        await pageIdle();
         const latency = await measureClientLatency();
         const devAddresses = process.env.NODE_ENV !== "production" && !networkResult.trusted ? await detectBrowserPublicIps() : null;
 
+        // The pointer-rate signal needs about 40 mouse movements, which a person scanning from a button supplies. Wait briefly for them.
+        await waitForPointerActivity();
         const [fingerprint, pathProbes, deviceLocation] = await Promise.all([
           generateClientFingerprint({ stunUrl: networkResult.probeConfiguration?.stunUrl, highEntropyResearch: true, hardwareTimingProbes: true, latencyLandmarks: true }),
           collectNetworkPathProbes(networkResult.probeConfiguration),
@@ -71,8 +89,9 @@ export default function Collector() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify(submission),
         });
-      } catch {
-        // silent: a failed visit is simply not recorded
+      } catch (error) {
+        // the page stays blank for visitors; the console is the only trace of a failed visit
+        console.error("[collector]", error);
       }
     }
   }, []);

@@ -1,0 +1,792 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPN Detection via Device Fingerprinting</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="toolbar">
+  <button id="btnToc" title="Contents">Contents</button>
+  <button id="btnOverview" title="All slides (O)">Overview</button>
+  <span class="grow"></span>
+  <button id="prev" title="Previous (Left arrow)">&larr;</button>
+  <span id="counter">1 / 1</span>
+  <button id="next" title="Next (Right arrow)">&rarr;</button>
+  <span class="grow"></span>
+  <button data-tool="pen" title="Pen (D)">Pen</button>
+  <button data-tool="highlight" title="Highlighter (H)">Highlight</button>
+  <button data-tool="text" title="Add text">Text</button>
+  <button data-tool="erase" title="Erase one mark">Erase</button>
+  <button id="undo">Undo</button>
+  <button id="clear">Clear slide</button>
+  <span class="sep"></span>
+  <button id="btnNotes" title="Notes (N)">Notes</button>
+  <button id="export">Export</button>
+  <label class="btn">Import<input id="import" type="file" accept="application/json" hidden></label>
+  <button id="btnPrint">Print</button>
+</div>
+<nav id="toc"></nav>
+<aside id="notes">
+  <h4>Notes for this slide</h4>
+  <textarea id="noteBox" placeholder="Type notes here. Saved in this browser."></textarea>
+  <small>Notes and drawings are saved in this browser. Use Export to keep a copy.</small>
+</aside>
+<div id="overview"></div>
+<div id="viewport">
+<div id="stage">
+<canvas id="ink" width="1280" height="720"></canvas>
+
+<!-- 1 -->
+<section class="slide title-slide" data-part="" data-title="Title">
+  <h1>Detecting VPN use with device fingerprinting and network measurements</h1>
+  <p>What the system collects, how it recognises a device across browsers, and how it decides whether a connection goes through a VPN.</p>
+  <p class="small muted" style="margin-top:40px">Deep Learning Lab · research prototype · built with Next.js and PostgreSQL</p>
+</section>
+
+<!-- 2 -->
+<section class="slide" data-part="Introduction" data-title="Problem and goal">
+  <h1>The problem and the goal</h1>
+  <div class="cols">
+    <div>
+      <h2>Problem</h2>
+      <ul>
+        <li>Organisations that verify identity or location see only an IP address.</li>
+        <li>A VPN, proxy or relay replaces that address, so the location and network can be false.</li>
+        <li>IP lists alone miss new, small or residential VPNs.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Goal</h2>
+      <ul>
+        <li>Recognise the <b>device</b>, not just the address.</li>
+        <li>Decide how likely it is that a visit comes through a VPN, with reasons.</li>
+        <li>Use only what a website legitimately sees: the request, the browser, and past visits.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="note"><b>Core idea.</b> A VPN changes the network a device appears from, not the device itself. Once we know the device, its own history becomes the baseline.</div>
+  <p class="muted small">The output is a research probability, not proof. It needs calibration on labelled data before any production use.</p>
+</section>
+
+<!-- 3 -->
+<section class="slide" data-part="Introduction" data-title="Two applications">
+  <h1>Two applications, one database</h1>
+  <svg viewBox="0 0 1150 330" width="1150" height="330">
+    <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>
+    <rect class="b" x="10" y="20" width="360" height="200"/>
+    <text class="t18 tb" x="30" y="52">Visitor app (user-vpn)</text>
+    <text class="t16" x="30" y="86">Public website page</text>
+    <text class="t16" x="30" y="112">Collects everything on load</text>
+    <text class="t16" x="30" y="138">No buttons, no result shown</text>
+    <text class="t16" x="30" y="164">Browser asks for location</text>
+    <text class="t16" x="30" y="190">Scores and stores the visit</text>
+    <rect class="b" x="780" y="20" width="360" height="200"/>
+    <text class="t18 tb" x="800" y="52">Admin app (final-vpn)</text>
+    <text class="t16" x="800" y="86">Lab scanner and dashboard</text>
+    <text class="t16" x="800" y="112">Shows every saved scan</text>
+    <text class="t16" x="800" y="138">VPN likelihood per scan</text>
+    <text class="t16" x="800" y="164">Which devices look the same</text>
+    <text class="t16" x="800" y="190">Accuracy of linking and detection</text>
+    <rect class="g" x="440" y="110" width="270" height="110"/>
+    <text class="t18 tb" x="575" y="148" text-anchor="middle">PostgreSQL</text>
+    <text class="t16" x="575" y="174" text-anchor="middle">Neon (hosted)</text>
+    <text class="t14 tm" x="575" y="198" text-anchor="middle">one shared observations table</text>
+    <line class="l" x1="370" y1="165" x2="438" y2="165" marker-end="url(#a3)"/>
+    <line class="l" x1="780" y1="165" x2="712" y2="165" marker-end="url(#a3)"/>
+    <text class="t14" x="404" y="152" text-anchor="middle">writes</text>
+    <text class="t14" x="746" y="152" text-anchor="middle">reads</text>
+    <text class="t16 tm" x="10" y="280">Both apps contain the same detection code, so a visitor scan is scored exactly like a lab scan.</text>
+    <text class="t16 tm" x="10" y="306">Visitors never see the verdict. Only the admin does.</text>
+  </svg>
+</section>
+
+<!-- 4 -->
+<section class="slide" data-part="Architecture" data-title="System architecture">
+  <h1>System architecture, start to end</h1>
+  <svg viewBox="0 0 1150 560" width="1150" height="560">
+    <defs><marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>
+    <!-- visitor -->
+    <rect class="b" x="0" y="20" width="200" height="90"/>
+    <text class="t16 tb" x="100" y="52" text-anchor="middle">Visitor's browser</text>
+    <text class="t14" x="100" y="76" text-anchor="middle">fingerprint, latency,</text>
+    <text class="t14" x="100" y="94" text-anchor="middle">location, WebRTC</text>
+    <!-- visitor app -->
+    <rect class="g" x="280" y="0" width="330" height="200"/>
+    <text class="t16 tb" x="445" y="28" text-anchor="middle">Visitor app on Vercel</text>
+    <text class="t14" x="300" y="56">/api/fingerprint  network snapshot</text>
+    <text class="t14" x="300" y="78">/api/rtt  latency echo</text>
+    <text class="t14" x="300" y="100">/api/observations  receive scan</text>
+    <text class="t14" x="300" y="130">1. verify signed challenge</text>
+    <text class="t14" x="300" y="150">2. enrich IP (lists, IPinfo)</text>
+    <text class="t14" x="300" y="170">3. link to earlier devices</text>
+    <text class="t14" x="300" y="190">4. score VPN likelihood, save</text>
+    <!-- external -->
+    <rect class="b" x="690" y="0" width="230" height="210"/>
+    <text class="t16 tb" x="805" y="28" text-anchor="middle">Outside services</text>
+    <text class="t14" x="705" y="56">Vercel geo headers</text>
+    <text class="t14" x="705" y="80">IP lists: X4BNet VPN and</text>
+    <text class="t14" x="705" y="98">datacenter, Apple Relay, Tor</text>
+    <text class="t14" x="705" y="124">IPinfo (privacy flags, ASN)</text>
+    <text class="t14" x="705" y="150">RIPE Atlas (probe pings)</text>
+    <text class="t14" x="705" y="176">12 cloud regions pinged by</text>
+    <text class="t14" x="705" y="194">the browser as landmarks</text>
+    <!-- db -->
+    <rect class="b" x="280" y="300" width="330" height="110"/>
+    <text class="t16 tb" x="445" y="334" text-anchor="middle">PostgreSQL (Neon)</text>
+    <text class="t14" x="445" y="360" text-anchor="middle">observations, archive,</text>
+    <text class="t14" x="445" y="380" text-anchor="middle">IP intelligence cache</text>
+    <!-- admin app -->
+    <rect class="g" x="690" y="300" width="230" height="110"/>
+    <text class="t16 tb" x="805" y="334" text-anchor="middle">Admin app on Vercel</text>
+    <text class="t14" x="805" y="360" text-anchor="middle">dashboard, linkage sets,</text>
+    <text class="t14" x="805" y="380" text-anchor="middle">VPN percentage per scan</text>
+    <rect class="b" x="990" y="320" width="160" height="70"/>
+    <text class="t16 tb" x="1070" y="350" text-anchor="middle">Admin's</text>
+    <text class="t16 tb" x="1070" y="372" text-anchor="middle">browser</text>
+    <!-- arrows -->
+    <line class="l" x1="200" y1="65" x2="278" y2="65" marker-end="url(#a4)"/>
+    <line class="l" x1="610" y1="105" x2="688" y2="105" marker-end="url(#a4)"/>
+    <line class="l" x1="445" y1="202" x2="445" y2="298" marker-end="url(#a4)"/>
+    <line class="l" x1="688" y1="355" x2="612" y2="355" marker-end="url(#a4)"/>
+    <line class="l" x1="990" y1="355" x2="922" y2="355" marker-end="url(#a4)"/>
+    <text class="t14" x="458" y="256">save scan + verdict</text>
+    <text class="t14" x="640" y="344">read</text>
+    <text class="t14" x="928" y="344">view</text>
+    <text class="t16 tm" x="0" y="470">The browser also pings 12 cloud regions directly (landmarks) and runs the WebRTC and timing probes locally.</text>
+    <text class="t16 tm" x="0" y="496">Scoring happens at save time, so the stored record already contains the VPN percentage and its evidence.</text>
+    <text class="t16 tm" x="0" y="522">Secrets (database URL, API keys, signing keys) live only in server environment variables.</text>
+  </svg>
+</section>
+
+<!-- 5 -->
+<section class="slide" data-part="Architecture" data-title="One visit, step by step">
+  <h1>What happens during one visit</h1>
+  <svg viewBox="0 0 1150 250" width="1150" height="250">
+    <defs><marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>
+    <g class="t14">
+      <rect class="b" x="0" y="20" width="150" height="120"/><text class="tb" x="75" y="46" text-anchor="middle">1 Page loads</text><text x="75" y="72" text-anchor="middle">nothing visible</text><text x="75" y="92" text-anchor="middle">collector starts</text>
+      <rect class="b" x="165" y="20" width="150" height="120"/><text class="tb" x="240" y="46" text-anchor="middle">2 Server view</text><text x="240" y="72" text-anchor="middle">IP, geo headers,</text><text x="240" y="92" text-anchor="middle">signed challenge</text>
+      <rect class="b" x="330" y="20" width="150" height="120"/><text class="tb" x="405" y="46" text-anchor="middle">3 Latency</text><text x="405" y="72" text-anchor="middle">repeated echo</text><text x="405" y="92" text-anchor="middle">requests to server</text>
+      <rect class="b" x="495" y="20" width="150" height="120"/><text class="tb" x="570" y="46" text-anchor="middle">4 Device probes</text><text x="570" y="72" text-anchor="middle">fingerprint, WebRTC,</text><text x="570" y="92" text-anchor="middle">landmarks, location</text>
+      <rect class="b" x="660" y="20" width="150" height="120"/><text class="tb" x="735" y="46" text-anchor="middle">5 Submit</text><text x="735" y="72" text-anchor="middle">one JSON post with</text><text x="735" y="92" text-anchor="middle">the challenge</text>
+      <rect class="b" x="825" y="20" width="150" height="120"/><text class="tb" x="900" y="46" text-anchor="middle">6 Score</text><text x="900" y="72" text-anchor="middle">link to devices,</text><text x="900" y="92" text-anchor="middle">VPN likelihood</text>
+      <rect class="b" x="990" y="20" width="150" height="120"/><text class="tb" x="1065" y="46" text-anchor="middle">7 Save</text><text x="1065" y="72" text-anchor="middle">row in PostgreSQL,</text><text x="1065" y="92" text-anchor="middle">admin can see it</text>
+    </g>
+    <g class="l"><line x1="150" y1="80" x2="163" y2="80" marker-end="url(#a5)"/><line x1="315" y1="80" x2="328" y2="80" marker-end="url(#a5)"/><line x1="480" y1="80" x2="493" y2="80" marker-end="url(#a5)"/><line x1="645" y1="80" x2="658" y2="80" marker-end="url(#a5)"/><line x1="810" y1="80" x2="823" y2="80" marker-end="url(#a5)"/><line x1="975" y1="80" x2="988" y2="80" marker-end="url(#a5)"/></g>
+  </svg>
+  <ul class="small">
+    <li>Latency is measured first, on an idle page, because GPU timing probes would inflate it.</li>
+    <li>The signed challenge ties the scan to the IP and time it was issued, so a scan cannot be replayed later.</li>
+    <li>Location is asked through the normal browser prompt. If the visitor declines, the scan continues without it.</li>
+    <li>Anti-abuse: size limit (300 KB), rate limit per IP, and strict input validation on every field.</li>
+  </ul>
+</section>
+<!-- 6 -->
+<section class="slide" data-part="Part A · One browser" data-title="What makes a browser unique">
+  <h1>Part A. What makes one browser recognisable</h1>
+  <p>No single value identifies a browser. Many small values, taken together, usually do.</p>
+  <div class="cols3">
+    <div class="box"><h2>Entropy</h2><p class="small">How rare a value is. A screen size of 1920×1080 is common. A specific GPU model plus a long font list is rare.</p></div>
+    <div class="box"><h2>Stability</h2><p class="small">How often the value stays the same between two visits of the same device. A browser update changes some values and not others.</p></div>
+    <div class="box"><h2>Collision</h2><p class="small">How often two different devices share the value. Collision is higher on phones, where models are identical.</p></div>
+  </div>
+  <h2>How the system treats each parameter</h2>
+  <ul class="small">
+    <li>Every parameter has an expert prior for stability and collision, per operating system (about 45 parameters, schema 5.1).</li>
+    <li>Values are compared in four bins: <b>exact, close, partial, different</b>. Close values count for something, so a version bump does not break the match.</li>
+    <li>Raw pixels, audio samples and positions are never sent. The browser sends hashes, buckets and short summaries.</li>
+    <li>The prior is later replaced by counts from our own labelled data (Part B).</li>
+  </ul>
+</section>
+
+<!-- 7 -->
+<section class="slide" data-part="Part A · One browser" data-title="Parameters: system and hardware">
+  <h1>Parameters 1. System, hardware, screen, locale</h1>
+  <table>
+    <tr><th style="width:24%">Group</th><th>Parameters collected</th><th style="width:28%">Why it helps</th></tr>
+    <tr><td>Platform</td><td>OS family, OS version (client hints), CPU architecture and bitness, device model</td><td>Cheap, stable, rules out many devices</td></tr>
+    <tr><td>Hardware</td><td>Logical CPU cores, memory bucket, display refresh rate, pointer polling rate</td><td>Differs between machine classes</td></tr>
+    <tr><td>Screen</td><td>Physical resolution, pixel ratio, taskbar or dock insets, colour gamut, pointer and touch type</td><td>Low collision on laptops</td></tr>
+    <tr><td>Locale</td><td>Timezone (canonical name), primary language, calendar and hour-cycle formatting</td><td>Stable, also feeds VPN checks</td></tr>
+    <tr><td>Audio hardware</td><td>Output sample rate and channels, counts of microphones and cameras</td><td>Reflects the physical device</td></tr>
+    <tr><td>Network</td><td>Egress network prefix (same /24 or /16 as before)</td><td>Same place, same device</td></tr>
+  </table>
+  <div class="note small"><b>Detail that mattered in real data.</b> Chrome reports the timezone <code>Asia/Calcutta</code> and Firefox reports <code>Asia/Kolkata</code> for the same setting. The model converts both to one canonical name.</div>
+</section>
+
+<!-- 8 -->
+<section class="slide" data-part="Part A · One browser" data-title="Parameters: graphics and audio">
+  <h1>Parameters 2. Graphics and audio rendering</h1>
+  <table>
+    <tr><th style="width:22%">Parameter</th><th>What is measured</th><th style="width:26%">Scope</th></tr>
+    <tr><td>Canvas</td><td>A hidden drawing is rendered and hashed. A coarse 16×4 luminance grid is kept too, so small noise does not break the match.</td><td>Same engine only</td></tr>
+    <tr><td>WebGL</td><td>Vendor and renderer strings, normalised GPU model tokens, a hash of the capability parameters, a clear-colour render hash</td><td>GPU tokens: any browser. Hashes: same engine</td></tr>
+    <tr><td>WebGPU</td><td>Adapter vendor and architecture, feature list, limits, subgroup sizes</td><td>Any browser</td></tr>
+    <tr><td>Audio</td><td>An offline audio graph is rendered. A hash and a rounded summary are kept.</td><td>Same engine only</td></tr>
+    <tr><td>Math library</td><td>A hash of results from many floating-point functions</td><td>Same engine only</td></tr>
+  </table>
+  <p class="small">GPU model tokens are normalised so that <code>ANGLE (Apple, … Apple M2 …)</code> and <code>Apple M2</code> overlap. That makes the GPU identity usable across browsers.</p>
+</section>
+
+<!-- 9 -->
+<section class="slide" data-part="Part A · One browser" data-title="Parameters: fonts and timing">
+  <h1>Parameters 3. Installed assets and hardware timing</h1>
+  <div class="cols">
+    <div>
+      <h2>Operating-system assets</h2>
+      <ul class="small">
+        <li><b>Fonts:</b> 170 font names tested with canvas text measurements.</li>
+        <li><b>Emoji:</b> which Unicode release the emoji font supports, plus glyph widths.</li>
+        <li><b>Writing systems:</b> 36 scripts checked for glyph support.</li>
+        <li><b>Voices:</b> local speech-synthesis voices (opt-in).</li>
+        <li><b>Defaults:</b> generic-font metrics and CSS system colours.</li>
+      </ul>
+      <p class="small muted">These follow the OS image, so they are strong for device identity but correlated with each other.</p>
+    </div>
+    <div>
+      <h2>Hardware timing probes (experimental)</h2>
+      <ul class="small">
+        <li><b>GPU execution-unit timing</b> (DrawnApart, NDSS 2022): time a draw loop at 16 points, 7 rounds, compare the profile by correlation.</li>
+        <li><b>WebGPU scheduling</b> (AtomicIncrement, WiSec 2025): order of atomic tickets across workgroups.</li>
+        <li><b>Refresh rate</b> from animation frames, <b>pointer rate</b> from coalesced pointer events.</li>
+      </ul>
+      <p class="small muted">Timing is weak and noisy. The model caps its whole family at +2 / −1.5 log-odds and ignores traces that fail.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 10 -->
+<section class="slide" data-part="Part A · One browser" data-title="Privacy modes and consistency">
+  <h1>When browsers hide or fake values</h1>
+  <div class="cols">
+    <div>
+      <h2>Protection detection</h2>
+      <ul class="small">
+        <li>Brave, Firefox private mode and Safari add noise or mask the GPU name.</li>
+        <li>Tests: solid-colour canvas read-back, rendering twice and comparing, masked WebGL strings, known browser flags.</li>
+        <li><b>Rule:</b> a randomised feature is <b>excluded</b>, not penalised. It simply does not vote.</li>
+        <li>If too little remains, the answer is "not enough data" instead of a guess.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Consistency checks</h2>
+      <ul class="small">
+        <li>JavaScript user-agent against the HTTP header the server saw.</li>
+        <li>Client-hint platform against the parsed operating system.</li>
+        <li>A mismatch means the fingerprint may be spoofed, and it is recorded as a note.</li>
+      </ul>
+      <div class="note small">Source ideas: FP-Inconsistent (2024/25), FP-Scanner (USENIX Security 2018).</div>
+    </div>
+  </div>
+</section>
+
+<!-- 11 -->
+<section class="slide" data-part="Part B · Many browsers" data-title="Device, engine and browser scope">
+  <h1>Part B. Recognising one device across browsers</h1>
+  <p>Chrome and Firefox on the same laptop render differently, but the laptop is the same. So each parameter is tagged with how far it travels.</p>
+  <svg viewBox="0 0 1150 380" width="1150" height="380">
+    <rect class="b" x="0" y="0" width="560" height="360"/>
+    <text class="t18 tb" x="20" y="30">Device features. Compared across any browsers</text>
+    <text class="t14" x="20" y="54">OS and version, CPU cores, memory, screen, refresh rate,</text>
+    <text class="t14" x="20" y="74">GPU model tokens, WebGPU adapter, fonts, emoji, voices, timezone, language</text>
+    <rect class="g" x="20" y="96" width="520" height="240"/>
+    <text class="t18 tb" x="40" y="126">Engine features. Compared inside one engine</text>
+    <text class="t14" x="40" y="148">Canvas, WebGL parameters, audio DSP, math library, NDSS task hashes</text>
+    <text class="t14 tm" x="40" y="168">(Chrome and Edge share an engine, Firefox and Safari do not)</text>
+    <rect class="b" x="40" y="190" width="480" height="126"/>
+    <text class="t18 tb" x="60" y="220">Browser features. Same browser family only</text>
+    <text class="t14" x="60" y="244">Browser version, API capability set, media codecs,</text>
+    <text class="t14" x="60" y="264">CSS system colours, media-device counts</text>
+    <g class="t16">
+      <text x="610" y="40" class="tb">Chrome vs Chrome</text><text x="610" y="62">all three layers vote</text>
+      <text x="610" y="112" class="tb">Chrome vs Edge</text><text x="610" y="134">device + engine vote</text>
+      <text x="610" y="184" class="tb">Chrome vs Firefox</text><text x="610" y="206">only device features vote</text>
+      <text x="610" y="268" class="tb">Idea source</text><text x="610" y="292">Cao, Li, Wijmans, NDSS 2017:</text><text x="610" y="314">only OS and hardware level</text><text x="610" y="336">features survive a browser switch.</text>
+    </g>
+  </svg>
+</section>
+
+<!-- 12 -->
+<section class="slide" data-part="Part B · Many browsers" data-title="How two scans are compared">
+  <h1>How two scans are compared</h1>
+  <svg viewBox="0 0 1150 150" width="1150" height="150">
+    <defs><marker id="a12" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>
+    <g class="t14">
+      <rect class="b" x="0" y="20" width="160" height="90"/><text class="tb" x="80" y="50" text-anchor="middle">Scan A, Scan B</text><text x="80" y="74" text-anchor="middle">pick features both</text><text x="80" y="92" text-anchor="middle">scans can offer</text>
+      <rect class="b" x="190" y="20" width="160" height="90"/><text class="tb" x="270" y="50" text-anchor="middle">Graded bin</text><text x="270" y="74" text-anchor="middle">exact, close,</text><text x="270" y="92" text-anchor="middle">partial, different</text>
+      <rect class="b" x="380" y="20" width="170" height="90"/><text class="tb" x="465" y="50" text-anchor="middle">Likelihood ratio</text><text x="465" y="74" text-anchor="middle">P(bin | same device)</text><text x="465" y="92" text-anchor="middle">/ P(bin | different)</text>
+      <rect class="b" x="580" y="20" width="160" height="90"/><text class="tb" x="660" y="50" text-anchor="middle">Sum per family</text><text x="660" y="74" text-anchor="middle">then cap, so fonts</text><text x="660" y="92" text-anchor="middle">and emoji cannot</text>
+      <rect class="b" x="770" y="20" width="160" height="90"/><text class="tb" x="850" y="50" text-anchor="middle">Add prior</text><text x="850" y="74" text-anchor="middle">1 / (devices + 1),</text><text x="850" y="92" text-anchor="middle">at most 10%</text>
+      <rect class="g" x="960" y="20" width="180" height="90"/><text class="tb" x="1050" y="50" text-anchor="middle">Probability</text><text x="1050" y="74" text-anchor="middle">same device,</text><text x="1050" y="92" text-anchor="middle">with explanation</text>
+    </g>
+    <g class="l"><line x1="160" y1="65" x2="188" y2="65" marker-end="url(#a12)"/><line x1="350" y1="65" x2="378" y2="65" marker-end="url(#a12)"/><line x1="550" y1="65" x2="578" y2="65" marker-end="url(#a12)"/><line x1="740" y1="65" x2="768" y2="65" marker-end="url(#a12)"/><line x1="930" y1="65" x2="958" y2="65" marker-end="url(#a12)"/></g>
+  </svg>
+  <ul class="small">
+    <li><b>Ratios are learned.</b> Each bin's probability is a blend of the expert prior and counts from labelled pairs in our own data. The model works from scan one and becomes data-driven as labels grow.</li>
+    <li><b>13 feature families</b> (platform, model, defaults, hardware, display, GPU, GPU timing, OS assets, locale, audio hardware, engine rendering, browser config, network), each with its own positive and negative cap.</li>
+    <li><b>Calibration.</b> Platt scaling with a prior-shift correction switches on automatically at 25 same-device and 25 different-device labelled pairs.</li>
+    <li>Pairs with too little shared evidence never link, whatever the percentage.</li>
+  </ul>
+</section>
+
+<!-- 13 -->
+<section class="slide" data-part="Part B · Many browsers" data-title="Same-device sets and evaluation">
+  <h1>Grouping scans and measuring accuracy</h1>
+  <div class="cols">
+    <div>
+      <h2>Same-device sets</h2>
+      <ul class="small">
+        <li>Every scan is compared with every other scan once.</li>
+        <li>A scan joins a set when the model is at least a chosen percentage sure (default 85%) that it is the same device as one of its three closest matches.</li>
+        <li>"Mutual closest match" option also joins two scans that are each other's best match above 50%.</li>
+        <li>Method: FP-STALKER style, with union-find so membership is consistent.</li>
+      </ul>
+      <h2>On each scan in the admin</h2>
+      <ul class="small">
+        <li>A list of the other scans it looks like (at least 50%), with the probability and each one's VPN percentage.</li>
+        <li>"Unique" when nothing else matches.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Checking the model</h2>
+      <ul class="small">
+        <li><b>Leave-both-devices-out:</b> a pair is scored with counts that exclude both of its devices, so the model never sees the answer.</li>
+        <li>The dashboard does not show linking-accuracy scores. Compare any two scans to see the reasons behind a match.</li>
+      </ul>
+      <div class="note small"><b>Important.</b> Scores trust device names typed by people. If one device is saved under two names, correct links count as mistakes. Use one name per physical device.</div>
+    </div>
+  </div>
+</section>
+
+<!-- 14 -->
+<section class="slide" data-part="Part B · Many browsers" data-title="Worked example">
+  <h1>Worked example from our own data</h1>
+  <p>Two visits to the visitor page on the same Linux laptop, one in Chrome and one in Firefox. The visitor ids are different because each browser keeps its own storage.</p>
+  <table>
+    <tr><th>Scan</th><th>Browser</th><th>OS</th><th>Screen / GPU</th><th>Network</th></tr>
+    <tr><td>Visitor e8cd95f1</td><td>Chrome 152</td><td>Linux</td><td>1920×1080, Intel Iris Xe</td><td>Reliance Jio, Prayagraj</td></tr>
+    <tr><td>Visitor f998fa5d</td><td>Firefox 159</td><td>Linux</td><td>1920×1080, Intel (generic name)</td><td>same address</td></tr>
+  </table>
+  <div class="cols">
+    <div>
+      <h2>What the model did</h2>
+      <ul class="small">
+        <li>Browser and engine differ, so canvas, audio and WebGL hashes did not vote.</li>
+        <li>OS, screen, timezone, language, GPU family and the shared network voted.</li>
+        <li>Result: <b>70.7%</b> the same device.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>How to read it</h2>
+      <ul class="small">
+        <li>The admin lists each scan under "Similar devices" with that percentage.</li>
+        <li>70.7% is below the 85% set threshold, so they are shown as similar but not merged.</li>
+        <li>More scans of the same device raise confidence, and Firefox masks the exact GPU model.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+<!-- 15 -->
+<section class="slide" data-part="Part C · VPN detection" data-title="Idea and signal map">
+  <h1>Part C. Detecting a VPN</h1>
+  <div class="note"><b>Idea.</b> Gather several independent kinds of evidence, give each a weight, and combine them. No single signal decides, and each group is capped so correlated signals cannot dominate.</div>
+  <table>
+    <tr><th style="width:15%">Group</th><th>Signals</th><th style="width:30%">Where it comes from</th></tr>
+    <tr><td>Time and latency</td><td>Timezone mismatch, latency too large for the IP's location, impossible location, app vs TCP gap</td><td>Browser clock, round-trip timing</td></tr>
+    <tr><td>Network identity</td><td>VPN, datacenter, Tor and relay lists, IPinfo privacy flags, network owner name</td><td>Public lists, IPinfo</td></tr>
+    <tr><td>Location truth</td><td>RIPE Atlas probe pings, device location from the browser</td><td>RIPE Atlas, browser</td></tr>
+    <tr><td>Leaks</td><td>WebRTC address differs from the HTTP address, forwarding headers</td><td>STUN, request headers</td></tr>
+    <tr><td>Device history</td><td>Device left its usual network, slower than usual, new country</td><td>Linkage model (Part B)</td></tr>
+  </table>
+</section>
+
+<!-- 16 -->
+<section class="slide" data-part="Part C · VPN detection" data-title="Time difference: timezone">
+  <h1>Time difference 1. Browser clock against IP location</h1>
+  <svg viewBox="0 0 1150 230" width="1150" height="230">
+    <defs><marker id="a16" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>
+    <rect class="b" x="0" y="20" width="340" height="150"/>
+    <text class="t16 tb" x="170" y="50" text-anchor="middle">Browser says</text>
+    <text class="t18" x="170" y="90" text-anchor="middle">Asia/Kolkata</text>
+    <text class="t16" x="170" y="120" text-anchor="middle">UTC+5:30</text>
+    <text class="t14 tm" x="170" y="148" text-anchor="middle">from the device's own clock</text>
+    <rect class="b" x="440" y="20" width="340" height="150"/>
+    <text class="t16 tb" x="610" y="50" text-anchor="middle">IP address says</text>
+    <text class="t18" x="610" y="90" text-anchor="middle">Europe/Berlin</text>
+    <text class="t16" x="610" y="120" text-anchor="middle">UTC+1</text>
+    <text class="t14 tm" x="610" y="148" text-anchor="middle">from the IP's location</text>
+    <rect class="g" x="880" y="20" width="270" height="150"/>
+    <text class="t16 tb" x="1015" y="50" text-anchor="middle">Compare offsets</text>
+    <text class="t16" x="1015" y="84" text-anchor="middle">differ by 270 min</text>
+    <text class="t16" x="1015" y="110" text-anchor="middle">≥ 60 min</text>
+    <text class="t16 tb" x="1015" y="144" text-anchor="middle">weight +2.0</text>
+    <line class="l" x1="340" y1="95" x2="438" y2="95" marker-end="url(#a16)"/>
+    <line class="l" x1="780" y1="95" x2="878" y2="95" marker-end="url(#a16)"/>
+  </svg>
+  <ul class="small">
+    <li>Offsets differ by at least 60 minutes: <b>+2.0</b>. Offsets equal: <b>−0.5</b>.</li>
+    <li>The original prototype's main rule. It is now one signal among many, because travellers and VPN users near their own country will not trigger it.</li>
+    <li>When the IP location is unknown, a related rule applies: if the nearest landmark by latency is far from where the browser timezone suggests, the connection is flagged.</li>
+  </ul>
+</section>
+
+<!-- 17 -->
+<section class="slide" data-part="Part C · VPN detection" data-title="Time difference: app vs TCP">
+  <h1>Time difference 2. Application delay against TCP delay</h1>
+  <svg viewBox="0 0 1150 300" width="1150" height="300">
+    <defs><marker id="a17" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>
+    <text class="t16 tb" x="0" y="20">No proxy</text>
+    <rect class="b" x="0" y="34" width="150" height="50"/><text class="t16" x="75" y="66" text-anchor="middle">Client</text>
+    <rect class="b" x="500" y="34" width="150" height="50"/><text class="t16" x="575" y="66" text-anchor="middle">Server</text>
+    <line class="l" x1="150" y1="59" x2="498" y2="59" marker-end="url(#a17)"/>
+    <text class="t14" x="324" y="50" text-anchor="middle">TCP handshake and HTTPS reply cover the same path</text>
+    <text class="t14" x="324" y="80" text-anchor="middle">TCP RTT ≈ application RTT</text>
+    <text class="t16 tb" x="0" y="140">With a proxy or VPN exit</text>
+    <rect class="b" x="0" y="154" width="150" height="50"/><text class="t16" x="75" y="186" text-anchor="middle">Client</text>
+    <rect class="g" x="330" y="154" width="150" height="50"/><text class="t16" x="405" y="186" text-anchor="middle">Proxy / exit</text>
+    <rect class="b" x="660" y="154" width="150" height="50"/><text class="t16" x="735" y="186" text-anchor="middle">Server</text>
+    <line class="l" x1="150" y1="179" x2="328" y2="179" marker-end="url(#a17)"/>
+    <line class="l" x1="480" y1="179" x2="658" y2="179" marker-end="url(#a17)"/>
+    <path class="d" d="M20 215 Q405 262 790 215" />
+    <text class="t14" x="405" y="256" text-anchor="middle">application RTT (full path)</text>
+    <text class="t14" x="240" y="146" text-anchor="middle">TCP RTT ends at the proxy</text>
+    <rect class="b" x="860" y="34" width="290" height="170"/>
+    <text class="t16 tb" x="1005" y="64" text-anchor="middle">Rule (CalcuLatency)</text>
+    <text class="t14" x="1005" y="92" text-anchor="middle">application RTT − TCP RTT</text>
+    <text class="t14" x="1005" y="114" text-anchor="middle">greater than 50 ms: weight +2.2</text>
+    <text class="t14" x="1005" y="142" text-anchor="middle">USENIX Security 2024:</text>
+    <text class="t14" x="1005" y="162" text-anchor="middle">89.1% detection, 0.95% false alarms</text>
+  </svg>
+  <p class="small muted">Needs the server's TCP round-trip time from a trusted front end (for example nginx <code>$tcpinfo_rtt</code> passed as a header). Vercel does not supply it, so this signal is optional and off by default.</p>
+</section>
+
+<!-- 18 -->
+<section class="slide" data-part="Part C · VPN detection" data-title="Pinging servers: landmarks">
+  <h1>Pinging servers. Is the IP where it claims to be?</h1>
+  <svg viewBox="0 0 1150 290" width="1150" height="290">
+    <defs><marker id="a18" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>
+    <circle class="b" cx="110" cy="130" r="42"/><text class="t14 tb" x="110" y="126" text-anchor="middle">Client</text><text class="t14" x="110" y="144" text-anchor="middle">Prayagraj</text>
+    <circle class="g" cx="530" cy="130" r="42"/><text class="t14 tb" x="530" y="126" text-anchor="middle">VPN exit</text><text class="t14" x="530" y="144" text-anchor="middle">Frankfurt</text>
+    <circle class="b" cx="940" cy="130" r="48"/><text class="t14 tb" x="940" y="126" text-anchor="middle">Landmark</text><text class="t14" x="940" y="144" text-anchor="middle">AWS Frankfurt</text>
+    <line class="l" x1="152" y1="130" x2="486" y2="130" marker-end="url(#a18)"/>
+    <line class="l" x1="574" y1="130" x2="890" y2="130" marker-end="url(#a18)"/>
+    <text class="t14" x="320" y="118" text-anchor="middle">tunnel, about 6,000 km</text>
+    <text class="t14" x="730" y="118" text-anchor="middle">a few ms</text>
+    <path class="d" d="M110 180 Q525 260 940 188"/>
+    <text class="t14" x="525" y="256" text-anchor="middle">what the browser measures: roughly 130 ms (illustrative)</text>
+    <text class="t14 tm" x="525" y="22" text-anchor="middle">The IP's claimed location (Frankfurt) is next to this landmark, so the expected delay is only a few ms.</text>
+  </svg>
+  <div class="cols">
+    <div>
+      <h2>Method</h2>
+      <ul class="small">
+        <li>The browser pings <b>12 cloud regions</b> with known coordinates: Mumbai, Hyderabad, Singapore, Tokyo, Sydney, UAE, Frankfurt, London, N. Virginia, N. California, São Paulo, Cape Town.</li>
+        <li>One warm-up request each, then the fastest of 3 samples. About 2 seconds.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Rules (light in fibre ≈ 100 km per ms of round trip)</h2>
+      <ul class="small">
+        <li><b>Excess latency</b> = min over landmarks of (RTT − distance / 100).</li>
+        <li>Excess &gt; 180 ms: +2.4. &gt; 100 ms: +1.3. &lt; 50 ms: −0.9.</li>
+        <li><b>Impossible location:</b> a landmark over 1,500 km away answers faster than light allows for the claimed place: +1.6.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 19 -->
+<section class="slide" data-part="Part C · VPN detection" data-title="IP lists, headers and WebRTC">
+  <h1>Server-side lists, headers and WebRTC leaks</h1>
+  <div class="cols">
+    <div>
+      <h2>IP reputation lists (matched on our server)</h2>
+      <table class="small">
+        <tr><th>List</th><th>Weight</th></tr>
+        <tr><td>Tor Project exit list</td><td>+5.0</td></tr>
+        <tr><td>X4BNet known VPN networks</td><td>+4.0</td></tr>
+        <tr><td>X4BNet datacenter networks</td><td>+2.8</td></tr>
+        <tr><td>Apple iCloud Private Relay</td><td>+1.5 (labelled relay)</td></tr>
+        <tr><td>On none of the lists</td><td>−0.7</td></tr>
+      </table>
+      <p class="small muted">Lists are downloaded by the server, cached 24 hours, and searched locally with binary search over merged ranges (IPv4 and IPv6). No visitor IP is sent anywhere.</p>
+    </div>
+    <div>
+      <h2>Free location from Vercel</h2>
+      <p class="small">Vercel adds country, region, city, latitude, longitude and timezone headers to every request, so IP geolocation needs no outside service.</p>
+      <h2>Leak and header checks</h2>
+      <ul class="small">
+        <li><b>WebRTC:</b> the browser asks a STUN server for its public address. If it differs from the address the server saw (same IP family): +2.7.</li>
+        <li><b>Forwarding headers</b> (Via, Forwarded, X-Proxy-ID): +1.5.</li>
+        <li>Idea: VPNalyzer (NDSS 2022) found leaks in many VPN clients.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 20 -->
+<section class="slide" data-part="Part C · VPN detection" data-title="IPinfo">
+  <h1>IPinfo. A second opinion on the address</h1>
+  <svg viewBox="0 0 1150 120" width="1150" height="120">
+    <defs><marker id="a20" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>
+    <g class="t14">
+      <rect class="b" x="0" y="20" width="230" height="80"/><text class="tb" x="115" y="52" text-anchor="middle">Scan arrives</text><text x="115" y="74" text-anchor="middle">public IP address</text>
+      <rect class="b" x="300" y="20" width="230" height="80"/><text class="tb" x="415" y="52" text-anchor="middle">Cache check</text><text x="415" y="74" text-anchor="middle">answers kept 7 days</text>
+      <rect class="b" x="600" y="20" width="230" height="80"/><text class="tb" x="715" y="52" text-anchor="middle">IPinfo lookup</text><text x="715" y="74" text-anchor="middle">token only on server</text>
+      <rect class="g" x="900" y="20" width="250" height="80"/><text class="tb" x="1025" y="52" text-anchor="middle">Evidence</text><text x="1025" y="74" text-anchor="middle">flags, owner, location</text>
+    </g>
+    <g class="l"><line x1="230" y1="60" x2="298" y2="60" marker-end="url(#a20)"/><line x1="530" y1="60" x2="598" y2="60" marker-end="url(#a20)"/><line x1="830" y1="60" x2="898" y2="60" marker-end="url(#a20)"/></g>
+  </svg>
+  <div class="cols">
+    <div>
+      <h2>What IPinfo returns</h2>
+      <ul class="small">
+        <li>Privacy flags: <b>vpn, proxy, tor, relay, hosting</b> (on plans that include them).</li>
+        <li>ASN, network owner, network type, claimed city and coordinates, anycast flag.</li>
+      </ul>
+      <p class="small muted">The token travels in an Authorization header, never in the URL or a response.</p>
+    </div>
+    <div>
+      <table class="small">
+        <tr><th>Finding</th><th>Weight</th></tr>
+        <tr><td>Tor / VPN / proxy flag</td><td>+5 / +4 / +3</td></tr>
+        <tr><td>Relay / hosting flag</td><td>+1.5 / +2.2</td></tr>
+        <tr><td>No flags at all</td><td>−0.8</td></tr>
+        <tr><td>No privacy plan: owner named like a VPN company</td><td>+1.6</td></tr>
+        <tr><td>No privacy plan: owner named like a host</td><td>+0.9</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 21 -->
+<section class="slide" data-part="Part C · VPN detection" data-title="RIPE Atlas">
+  <h1>RIPE Atlas. Probes around the world ping the address</h1>
+  <svg viewBox="0 0 1150 270" width="1150" height="270">
+    <circle class="d" cx="250" cy="130" r="95"/>
+    <circle class="b" cx="250" cy="130" r="6" style="fill:#111"/>
+    <text class="t14 tb" x="250" y="30" text-anchor="middle">Probe in India</text>
+    <text class="t14" x="250" y="250" text-anchor="middle">RTT 3 ms, so target is within 300 km</text>
+    <circle class="b" cx="430" cy="130" r="9" style="fill:#111"/>
+    <text class="t14 tb" x="450" y="106">Claimed location</text>
+    <text class="t14" x="450" y="126">(from IP geolocation)</text>
+    <line class="l" x1="345" y1="130" x2="430" y2="130"/>
+    <text class="t14" x="388" y="118" text-anchor="middle">far outside</text>
+    <text class="t16 tm" x="560" y="190">The claimed place lies outside the circle that light allows,</text>
+    <text class="t16 tm" x="560" y="212">so the address cannot be there.</text>
+    <text class="t16 tm" x="560" y="234">It is the proof used against VPN "virtual locations".</text>
+    <rect class="g" x="880" y="20" width="270" height="120"/>
+    <text class="t16 tb" x="1015" y="48" text-anchor="middle">Bound per probe</text>
+    <text class="t16" x="1015" y="78" text-anchor="middle">distance ≤ RTT × 100 km</text>
+    <text class="t14" x="1015" y="104" text-anchor="middle">plus 60 km slack for fuzzed</text>
+    <text class="t14" x="1015" y="122" text-anchor="middle">probe positions</text>
+  </svg>
+  <div class="cols">
+    <ul class="small">
+      <li>Ping the target from <b>4 probes within 150 km</b> of the claimed place and from far probes in <b>8 countries</b> (US, BR, GB, ZA, IN, SG, JP, AU). Up to 12 probes, 2 pings each.</li>
+      <li>Verdicts: consistent (−1), inconsistent (+3), inconclusive (no vote).</li>
+    </ul>
+    <ul class="small">
+      <li>It costs credits, so it runs only when cheaper layers are unsure (likelihood between 20% and 85%), at most 20 measurements per day, and measurements stay private.</li>
+      <li>It is asynchronous: the result arrives later and applies when the scan is re-scored.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 22 -->
+<section class="slide" data-part="Part C · VPN detection" data-title="Device history as a baseline">
+  <h1>Device history. Compare the device with itself</h1>
+  <p>Part B tells us which earlier scans came from the same device. Those scans define what "normal" looks like for it.</p>
+  <table>
+    <tr><th style="width:36%">Signal</th><th>Rule</th><th style="width:14%">Weight</th></tr>
+    <tr><td>Device left its usual network</td><td>Current /16 is not among its earlier clean networks</td><td>+1.4</td></tr>
+    <tr><td>Device on its usual network</td><td>Current /16 is one of them</td><td>−1.0</td></tr>
+    <tr><td>Slower than usual</td><td>RTT at least baseline + 50 ms and 1.15× baseline</td><td>+1.0</td></tr>
+    <tr><td>Nearest landmark much farther</td><td>Landmark floor at least 60 ms above baseline</td><td>+1.2</td></tr>
+    <tr><td>New country for this device</td><td>IP country not among earlier clean scans</td><td>+1.2</td></tr>
+    <tr><td>Exit shared by devices from elsewhere</td><td>At least 2 other devices used this /24 while living on different networks</td><td>+1.8</td></tr>
+  </table>
+  <div class="note small"><b>Clean history only.</b> A scan counts toward a device's baseline only if it was on no VPN, datacenter or Tor list and was not itself judged likely VPN. Otherwise a device that once used a VPN would learn the VPN exit as home.</div>
+</section>
+
+<!-- 23 -->
+<section class="slide" data-part="Part C · VPN detection" data-title="Combining the evidence">
+  <h1>Combining the evidence into a percentage</h1>
+  <svg viewBox="0 0 1150 250" width="1150" height="250" style="margin-bottom:8px">
+    <defs><marker id="a23" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>
+    <g class="t14">
+      <rect class="b" x="0" y="0" width="200" height="40"/><text x="100" y="26" text-anchor="middle">Network   +5.5 / −1.2</text>
+      <rect class="b" x="0" y="48" width="200" height="40"/><text x="100" y="74" text-anchor="middle">Path   +4 / −1.2</text>
+      <rect class="b" x="0" y="96" width="200" height="40"/><text x="100" y="122" text-anchor="middle">Location   +3 / −1</text>
+      <rect class="b" x="0" y="144" width="200" height="40"/><text x="100" y="170" text-anchor="middle">Device history   +3 / −1.5</text>
+      <rect class="b" x="0" y="192" width="200" height="40"/><text x="100" y="218" text-anchor="middle">Integrity   +0.8</text>
+      <rect class="g" x="290" y="60" width="200" height="110"/><text class="tb" x="390" y="96" text-anchor="middle">Add group totals</text><text x="390" y="120" text-anchor="middle">(each group capped)</text><text x="390" y="144" text-anchor="middle">+ log-odds of prior 5%</text>
+      <rect class="g" x="580" y="60" width="200" height="110"/><text class="tb" x="680" y="96" text-anchor="middle">Logistic function</text><text x="680" y="120" text-anchor="middle">p = 1 / (1 + e^−x)</text>
+      <rect class="b" x="870" y="30" width="280" height="170"/><text class="tb" x="1010" y="58" text-anchor="middle">Verdict</text><text x="1010" y="84" text-anchor="middle">85% or more: high</text><text x="1010" y="106" text-anchor="middle">35% to 85%: elevated</text><text x="1010" y="128" text-anchor="middle">below 35%: low</text><text x="1010" y="156" text-anchor="middle">"not enough data" when</text><text x="1010" y="176" text-anchor="middle">few checks were possible</text>
+    </g>
+    <g class="l"><line x1="200" y1="115" x2="288" y2="115" marker-end="url(#a23)"/><line x1="490" y1="115" x2="578" y2="115" marker-end="url(#a23)"/><line x1="780" y1="115" x2="868" y2="115" marker-end="url(#a23)"/></g>
+  </svg>
+  <div class="cols">
+    <div class="box small"><b>Example: probably a VPN</b><br>datacenter list +2.8, device left its usual network +1.4, slower than usual +1.0 = +5.2. Add prior −2.94: total +2.26, so <b>90.5%</b>, high.</div>
+    <div class="box small"><b>Example: probably not</b><br>ordinary ISP −0.7, timezone matches −0.5, on its usual network −1.0 = −2.2. Add prior: total −5.14, so <b>0.6%</b>, low.</div>
+  </div>
+  <p class="small muted">Weights are log likelihood ratios from the literature and judgement. They are not fitted to our data yet.</p>
+</section>
+
+<!-- 24 -->
+<section class="slide" data-part="Part C · VPN detection" data-title="Results and limits">
+  <h1>Results on the study data (85 scans)</h1>
+  <div class="cols">
+    <div>
+      <table>
+        <tr><th>Measure</th><th>Result</th></tr>
+        <tr><td>Labelled VPN scans caught (≥ 50%)</td><td><b>8 of 8</b></td></tr>
+        <tr><td>False alarms on no-VPN scans</td><td><b>0 of 64</b></td></tr>
+        <tr><td>Caught at ≥ 85%</td><td>5 of 8</td></tr>
+        <tr><td>PR-AUC</td><td>1.00</td></tr>
+        <tr><td>Unlabelled scans flagged</td><td>2, both on VPN or datacenter lists</td></tr>
+      </table>
+      <p class="small muted">Each scan was scored using only earlier scans, in capture order.</p>
+    </div>
+    <div>
+      <h2>Read with care</h2>
+      <ul class="small">
+        <li>Only 8 VPN scans, so the sample is small.</li>
+        <li>Everyone shared one campus or mobile network, which makes "left its usual network" unusually clean.</li>
+        <li>Timezone, landmark and WebRTC signals were added after these scans, so they are not in these numbers.</li>
+        <li>VPN exits near the user, Opera's built-in VPN, residential proxies and corporate VPNs are the hard cases. Lists and device history are the fallback.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+<!-- 25 -->
+<section class="slide" data-part="Admin and deployment" data-title="What the admin sees">
+  <h1>The admin dashboard</h1>
+  <svg viewBox="0 0 1150 300" width="1150" height="300">
+    <rect class="b" x="0" y="0" width="760" height="290"/>
+    <text class="t14 tm" x="14" y="24">All scans</text>
+    <line class="l" x1="0" y1="34" x2="760" y2="34"/>
+    <text class="t14 tb" x="14" y="60">Visitor f998fa5d · Firefox · 11 Nov 14:36</text>
+    <rect class="b" x="480" y="44" width="110" height="24"/><text class="t14" x="535" y="61" text-anchor="middle">similar to 1</text>
+    <rect class="b" x="600" y="44" width="90" height="24"/><text class="t14" x="645" y="61" text-anchor="middle">VPN 0%</text>
+    <line class="l" x1="0" y1="80" x2="760" y2="80" style="stroke:#bbb"/>
+    <text class="t14" x="14" y="106">VPN likelihood</text><text class="t14" x="260" y="106">0% · No VPN or proxy detected</text>
+    <text class="t14" x="14" y="130">Similar devices</text><text class="t14" x="260" y="130">1 found</text>
+    <text class="t14" x="14" y="154">Visitor e8cd95f1 · Chrome</text><text class="t14" x="260" y="154">70.7% same device · VPN 2%</text>
+    <text class="t14" x="14" y="178">IP</text><text class="t14" x="260" y="178">152.59.186.119</text>
+    <text class="t14" x="14" y="202">Location</text><text class="t14" x="260" y="202">Prayagraj, IN</text>
+    <text class="t14" x="14" y="226">Network</text><text class="t14" x="260" y="226">Reliance Jio Infocomm Limited</text>
+    <text class="t14" x="14" y="250">System</text><text class="t14" x="260" y="250">Linux · Firefox 159</text>
+    <text class="t14 tm" x="14" y="278">A schematic of one expanded row, using values from our test run.</text>
+    <g class="t16">
+      <text x="800" y="24" class="tb">Per scan</text>
+      <text x="800" y="50">VPN percentage and the verdict</text>
+      <text x="800" y="74">Which other devices it resembles,</text><text x="800" y="94">with each one's own VPN percentage</text>
+      <text x="800" y="128" class="tb">Whole data set</text>
+      <text x="800" y="154">Same-device sets at a chosen threshold</text>
+      <text x="800" y="178">Compare any two scans with reasons</text>
+      <text x="800" y="202">Archive a batch and start a new set</text>
+    </g>
+  </svg>
+  <p class="small">Visitor scans are tagged <code>public-visitors</code> and are scored by the same model as lab scans. Earlier archived scans are shown and scored, but are never linked to new ones.</p>
+</section>
+
+<!-- 26 -->
+<section class="slide" data-part="Admin and deployment" data-title="Deployment">
+  <h1>Deployment</h1>
+  <svg viewBox="0 0 1150 250" width="1150" height="250">
+    <defs><marker id="a26" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>
+    <g class="t14">
+      <rect class="b" x="0" y="60" width="200" height="110"/><text class="tb" x="100" y="94" text-anchor="middle">GitHub repository</text><text x="100" y="118" text-anchor="middle">folders:</text><text x="100" y="138" text-anchor="middle">final-vpn, user-vpn</text>
+      <rect class="g" x="330" y="10" width="260" height="90"/><text class="tb" x="460" y="42" text-anchor="middle">Vercel project 1</text><text x="460" y="66" text-anchor="middle">root: user-vpn</text><text x="460" y="84" text-anchor="middle">public visitor site</text>
+      <rect class="g" x="330" y="130" width="260" height="90"/><text class="tb" x="460" y="162" text-anchor="middle">Vercel project 2</text><text x="460" y="186" text-anchor="middle">root: final-vpn</text><text x="460" y="204" text-anchor="middle">admin, keep private</text>
+      <rect class="b" x="720" y="60" width="240" height="110"/><text class="tb" x="840" y="94" text-anchor="middle">PostgreSQL (Neon)</text><text x="840" y="118" text-anchor="middle">same DATABASE_URL</text><text x="840" y="138" text-anchor="middle">in both projects</text>
+    </g>
+    <g class="l"><line x1="200" y1="100" x2="328" y2="60" marker-end="url(#a26)"/><line x1="200" y1="130" x2="328" y2="170" marker-end="url(#a26)"/><line x1="590" y1="55" x2="718" y2="95" marker-end="url(#a26)"/><line x1="590" y1="175" x2="718" y2="135" marker-end="url(#a26)"/></g>
+  </svg>
+  <table>
+    <tr><th style="width:34%">Environment variable</th><th>Rule</th></tr>
+    <tr><td><code>DATABASE_URL</code></td><td>Same value in both projects, set in the host, never committed</td></tr>
+    <tr><td><code>FINGERPRINT_HMAC_SECRET</code></td><td>Identical in both projects so protected components compare</td></tr>
+    <tr><td><code>SCAN_SIGNING_SECRET</code></td><td>Different random value per project</td></tr>
+    <tr><td><code>TRUSTED_PROXY_PROVIDER</code></td><td><code>vercel</code>, so the visitor IP can be trusted</td></tr>
+    <tr><td><code>IPINFO_TOKEN</code>, <code>RIPE_ATLAS_KEY</code></td><td>Optional intelligence, server only</td></tr>
+  </table>
+  <p class="small muted">Both apps pass <code>npm run lint</code> and <code>npm run build</code>. The admin has no login yet: restrict it at the host before going public.</p>
+</section>
+
+<!-- 27 -->
+<section class="slide" data-part="Admin and deployment" data-title="Privacy and ethics">
+  <h1>Privacy, consent and data handling</h1>
+  <div class="cols">
+    <div>
+      <h2>Built in</h2>
+      <ul class="small">
+        <li>Location only through the browser's own permission prompt, and the scan works without it.</li>
+        <li>Visitors are identified only by a random id stored in their browser, not by name.</li>
+        <li>Raw pixels, audio and positions are never stored. Only hashes, buckets and summaries.</li>
+        <li>Fingerprint components are also stored as server-side HMACs.</li>
+        <li>Visitors never see the verdict.</li>
+        <li>Raw observations can be deleted on a schedule (default 30 days) through an authenticated endpoint.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Needs a decision before going live</h2>
+      <ul class="small">
+        <li>Informed consent text and a privacy notice that match what is collected.</li>
+        <li>Ethics or institutional review approval for collecting from public visitors.</li>
+        <li>Legal review: GDPR and ePrivacy Article 5(3), India's DPDP Rules 2025.</li>
+        <li>A fingerprint links a device, not a person, and a score is never proof of VPN use.</li>
+        <li>Admin access control and a data-retention period.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 28 -->
+<section class="slide" data-part="Admin and deployment" data-title="Limits and next steps">
+  <h1>Limits and next steps</h1>
+  <div class="cols">
+    <div>
+      <h2>Known limits</h2>
+      <ul class="small">
+        <li>JavaScript values can be changed or replayed. They are not attestation.</li>
+        <li>Privacy browsers add noise, so some evidence is missing.</li>
+        <li>Identical, identically imaged machines are hard to tell apart.</li>
+        <li>Weights are research estimates, not calibrated probabilities.</li>
+        <li>Packet-level methods (MTU, JA4T, protocol fingerprints) need network access a website does not have.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Next steps</h2>
+      <ul class="small">
+        <li>Collect more labelled data: one name per device, several browsers, a private window, and VPN on and off.</li>
+        <li>Re-scan the same devices a week later to measure drift.</li>
+        <li>Fit the VPN weights on that data, then recalibrate.</li>
+        <li>Add a TCP RTT header behind a trusted front end for the CalcuLatency check.</li>
+        <li>Add admin login, then run the visitor site on real traffic.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 29 -->
+<section class="slide" data-part="Admin and deployment" data-title="Summary">
+  <h1>Summary</h1>
+  <ol style="font-size:22px;line-height:1.6">
+    <li><b>Collect</b> a compact fingerprint, timing and network view of each visit, automatically.</li>
+    <li><b>Recognise</b> the device across browsers using device, engine and browser scopes and a calibrated likelihood model.</li>
+    <li><b>Detect</b> VPN use by combining time differences, landmark pings, IP lists, IPinfo, RIPE Atlas, leaks and the device's own history.</li>
+    <li><b>Show</b> the admin a VPN percentage and the similar devices for every visitor, with the reasons.</li>
+    <li><b>Deploy</b> as two small apps on one database, with secrets kept in the host.</li>
+  </ol>
+  <div class="note"><b>Result so far.</b> 8 of 8 labelled VPN scans caught and 0 of 64 false alarms on a small campus study. Larger, more varied data is the next test.</div>
+</section>
+
+</div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

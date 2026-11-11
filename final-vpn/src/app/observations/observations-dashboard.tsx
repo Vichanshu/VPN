@@ -6,7 +6,7 @@ import { Archive, ArrowLeft, BarChart3, GitCompare, Layers, Loader2, Lock, Refre
 import type { ResearchObservation } from "@/utils/fingerprint";
 import { evaluateStoredModel } from "@/utils/evaluation";
 import type { ArchivedObservation } from "@/utils/research-store";
-import { browserOf, groupSameDevice, linkObservations, scoreAllPairs, type LinkageEvaluation, type LinkageModel, type LinkageResult, type PairPosteriors } from "@/utils/linkage";
+import { browserOf, groupSameDevice, linkObservations, scoreAllPairs, type LinkageModel, type LinkageResult, type PairPosteriors } from "@/utils/linkage";
 import { Card, Disclosure, DivergingBar, Empty, Pill, Row, inputClass, toneText, type Tone } from "@/components/ui";
 
 type Dataset = "current" | "archived" | "prototype";
@@ -23,11 +23,10 @@ const SCOPES: Array<{ id: Scope; label: string }> = [
   { id: "prototype", label: "Original prototype" },
 ];
 
-export default function ObservationsDashboard({ initialObservations, legacyObservations, linkageModel, linkageEvaluation, archivedObservations, archiveEnabled }: {
+export default function ObservationsDashboard({ initialObservations, legacyObservations, linkageModel, archivedObservations, archiveEnabled }: {
   initialObservations: ResearchObservation[];
   legacyObservations: ResearchObservation[];
   linkageModel: LinkageModel;
-  linkageEvaluation: LinkageEvaluation;
   archivedObservations: ArchivedObservation[];
   archiveEnabled: boolean;
 }) {
@@ -59,7 +58,6 @@ export default function ObservationsDashboard({ initialObservations, legacyObser
   const labels = new Set(scoped.map((item) => item.deviceLabel)).size;
   const browsers = new Set(scoped.map((item) => item.fingerprint.browserFamily)).size;
   const ips = new Set(scoped.map((item) => item.effectivePublicIp).filter((value) => value && value !== "Unknown")).size;
-  const overall = linkageEvaluation.metrics.find((item) => item.context === "all");
   const first = initialObservations.find((item) => item.observationId === firstId) || null;
   const second = initialObservations.find((item) => item.observationId === secondId) || null;
   const comparison = first && second && first !== second ? linkObservations(first, second, linkageModel) : null;
@@ -118,29 +116,7 @@ export default function ObservationsDashboard({ initialObservations, legacyObser
 
         <VpnDetectionPanel observations={scoped} datasetOf={datasetOf} />
 
-        <Card className="p-5">
-          <p className="text-sm text-muted">How well does linking work on your data? <span className="text-xs">(current set of {initialObservations.length} scans)</span></p>
-          {overall && overall.positives > 0 && overall.negatives > 0 ? (
-            <div className="mt-3 grid gap-4 sm:grid-cols-3">
-              <Headline value={formatRate(overall.rocAuc)} label="Ranking quality (ROC AUC)" tone={toneFor(overall.rocAuc, 0.95, 0.8)} />
-              <Headline value={formatRate(linkageEvaluation.rank1Accuracy)} label={`Top match correct (${linkageEvaluation.rank1Queries} scans)`} tone={toneFor(linkageEvaluation.rank1Accuracy, 0.9, 0.7)} />
-              <Headline value={formatRate(overall.equalErrorRate)} label="Equal error rate (lower is better)" tone={overall.equalErrorRate === null ? "neutral" : overall.equalErrorRate <= 0.05 ? "good" : overall.equalErrorRate <= 0.15 ? "warn" : "bad"} />
-            </div>
-          ) : (
-            <p className="mt-2 text-sm text-ink-2">Not enough labelled data yet. Scan at least two devices, each twice, using their names consistently.</p>
-          )}
-        </Card>
-
         <SameDeviceSets observations={initialObservations} pairs={pairs} />
-
-        <p className="px-1 text-xs leading-5 text-muted">
-          These scores trust the device names you typed. If one device was saved under two names, its correct links count as mistakes,
-          and two devices sharing a name count as missed links. “Same-device sets” shows where the names disagree with the model.
-        </p>
-
-        <Disclosure title="Accuracy by situation" hint="Same browser, same engine, different browsers" icon={<BarChart3 className="h-4 w-4" />}>
-          <EvaluationDetails evaluation={linkageEvaluation} model={linkageModel} />
-        </Disclosure>
 
         <Disclosure title="Compare two scans" hint="Pick any pair to see the reasoning" icon={<GitCompare className="h-4 w-4" />}>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -520,42 +496,6 @@ function ComparisonView({ result, sameName }: { result: LinkageResult; sameName:
           ))}
         </div>
       </details>
-    </div>
-  );
-}
-
-function EvaluationDetails({ evaluation, model }: { evaluation: LinkageEvaluation; model: LinkageModel }) {
-  const totalSame = Object.values(model.samePairs).reduce((sum, value) => sum + value, 0);
-  return (
-    <div className="space-y-4">
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[620px] text-left text-sm">
-          <thead className="text-xs text-muted"><tr className="border-b border-line"><th className="py-2 pr-3 font-medium">Situation</th><th className="px-3 py-2 font-medium">Pairs (same / different)</th><th className="px-3 py-2 font-medium">ROC AUC</th><th className="px-3 py-2 font-medium">Equal error</th><th className="px-3 py-2 font-medium">Found at 1% false alarms</th></tr></thead>
-          <tbody>
-            {evaluation.metrics.map((item) => (
-              <tr key={item.context} className="border-b border-line last:border-0">
-                <td className="py-2 pr-3 text-ink">{item.context === "all" ? "All pairs" : item.context.replace("-", " ")}</td>
-                <td className="px-3 py-2 font-mono text-xs">{item.positives} / {item.negatives}</td>
-                <td className="px-3 py-2 font-mono text-xs">{formatRate(item.rocAuc)}</td>
-                <td className="px-3 py-2 font-mono text-xs">{formatRate(item.equalErrorRate)}</td>
-                <td className="px-3 py-2 font-mono text-xs">{formatRate(item.tprAtFpr1)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {evaluation.familyImportance.length > 0 && (
-        <div>
-          <p className="mb-2 text-sm font-medium text-ink">Which signal groups separate devices best</p>
-          {evaluation.familyImportance.map((item) => (
-            <Row key={item.family} label={item.label} value={`${item.separation.toFixed(2)} (same ${item.meanGenuine.toFixed(1)} vs different ${item.meanImpostor.toFixed(1)})`} />
-          ))}
-        </div>
-      )}
-      <p className="text-xs leading-5 text-muted">
-        {evaluation.note} {evaluation.pairsScored} pairs from {evaluation.observations} scans{evaluation.sampled ? " (different-device pairs sampled)" : ""}.
-        Training data: {totalSame} same-device and {model.differentPairs} different-device pairs; {model.calibration ? "calibrated" : "not yet calibrated"}.
-      </p>
     </div>
   );
 }

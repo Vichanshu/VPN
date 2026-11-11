@@ -16,7 +16,15 @@ function cacheKey(observations: ResearchObservation[]): string {
  * Training compares every labelled pair (bounded), so the model is cached
  * until the dataset changes or five minutes pass.
  */
-export function cachedLinkageModel(observations: ResearchObservation[]): LinkageModel {
+/**
+ * Public visitors have no real device name (each browser gets its own random
+ * label), so training would count the same laptop in two browsers as two
+ * different devices. They are scored against the model but never train it.
+ */
+const UNLABELLED_STUDY = "public-visitors";
+
+export function cachedLinkageModel(allObservations: ResearchObservation[]): LinkageModel {
+  const observations = allObservations.filter((item) => item.studyId !== UNLABELLED_STUDY);
   const shared = globalThis as LinkageGlobal;
   const key = cacheKey(observations);
   const cached = shared.__linkageModel;
